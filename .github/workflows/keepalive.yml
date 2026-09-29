@@ -1,0 +1,22 @@
+name: Keep Render backend awake
+
+# Render's free tier spins a web service down after 15 minutes of inactivity, which then costs the next
+# request a ~30-60s cold start. This pings the health endpoint every 5 minutes so a demo/judging session
+# never has to wait through a cold start. Uses only GitHub Actions' own free minutes — no third-party
+# account, API key, or secret needed.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}  # lets you trigger a manual ping from the Actions tab too
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping backend health endpoint
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://nwis-backend-hz80.onrender.com/api/health)
+          echo "Health check responded with HTTP $code"
+          if [ "$code" != "200" ]; then
+            echo "::warning::Backend did not return 200 (got $code) - it may be cold-starting or down."
+          fi

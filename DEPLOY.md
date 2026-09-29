@@ -25,19 +25,28 @@ git push -u origin main
 `data/` is gitignored on purpose — the backend regenerates it during the Render build (see below), so nothing
 large needs to be committed.
 
-## 1. Backend on Render
+## 1. Backend on Render — done
 
-1. Go to [render.com](https://render.com) → **New +** → **Blueprint**, and point it at this repo. Render will
-   read `render.yaml` at the repo root and set everything up: build command, start command, Python version.
+Deployed at **https://nwis-backend-hz80.onrender.com** (Blueprint `nwis-sih26121`, connected via the public
+repo URL rather than the GitHub App, so there's no OAuth grant on file — see the note on redeploys below).
+
+1. `render.yaml` at the repo root drives the whole thing: build command, start command, Python version.
 2. The build step runs `build_dataset.py`, `ingest_all.py`, and `train_model.py` in sequence — this
    regenerates the synthetic data, ingests it (including OCR on the scanned samples), and trains the risk
-   model, all from scratch. **Expect the first build to take several minutes.** Every redeploy starts clean.
-3. Once it's live, copy the service URL Render gives you (something like `https://nwis-backend.onrender.com`).
-4. **Free-tier note:** a free Render web service spins down after 15 minutes of inactivity and spins back up
-   on the next request (with a ~30–60s cold start). Because the demo data is baked in during the *build* step
-   rather than written at runtime, spinning back up always returns to the same clean starting state — good for
-   a repeatable demo, but it means anything uploaded live through the dashboard (a new PDF, alert feedback)
-   won't survive a spin-down. If you need that to persist, move to a paid Render plan with a persistent disk.
+   model, all from scratch. First build took ~4 minutes. Every redeploy starts clean.
+3. **Free-tier spin-down:** a free Render web service spins down after 15 minutes of inactivity and spins
+   back up on the next request (~30–60s cold start). Because the demo data is baked in during the *build*
+   step rather than written at runtime, spinning back up always returns to the same clean starting state —
+   fine for a repeatable demo, but anything uploaded live through the dashboard (a new PDF, alert feedback)
+   won't survive a spin-down. **`.github/workflows/keepalive.yml`** pings `/api/health` every 5 minutes using
+   GitHub Actions' own free minutes (no third-party account or API key needed) specifically so it never has
+   the chance to go idle long enough to sleep — this starts running automatically once you push this repo.
+4. **Redeploying:** this Blueprint was connected via the *public repository URL*, not the GitHub App, so
+   **auto-deploy on push is off** — the free-tier "no repos found" GitHub connection step was skipped
+   deliberately to avoid an OAuth authorization click that wasn't yours to approve sight-unseen. To ship a
+   backend change, push to GitHub as usual, then in the Render dashboard open `nwis-backend` → **Manual
+   Deploy** → **Deploy latest commit**. (You can connect the GitHub App later, under the service's Settings,
+   if you'd rather have it auto-deploy — that's the point where Render will ask to authorize repo access.)
 
 ## 2. Frontend on Vercel
 
@@ -63,7 +72,7 @@ actual frontend is the tidier choice once you know the URL).
 
 ## Verifying it worked
 
-- `https://nwis-backend.onrender.com/api/health` should return `{"ok": true, ...}`.
+- `https://nwis-backend-hz80.onrender.com/api/health` should return `{"ok": true, ...}` — confirmed working.
 - Open the Vercel URL, go to **Live monitor**, and start the replay — if alerts and charts update live, the
   SSE connection to Render is working end to end.
 - If the Live monitor looks stuck: open the browser console and check for CORS errors (means step 3 needs
@@ -72,6 +81,7 @@ actual frontend is the tidier choice once you know the URL).
 
 ## Updating either side later
 
-- Backend changes: push to GitHub; Render redeploys and rebuilds the dataset from scratch automatically.
+- Backend changes: push to GitHub, then trigger **Manual Deploy** on `nwis-backend` in the Render dashboard
+  (see the redeploy note in step 1 — auto-deploy isn't wired up for this connection method).
 - Frontend changes: push to GitHub; Vercel redeploys automatically. If you only changed `VITE_API_BASE`,
   trigger a redeploy manually from the Vercel dashboard (env var changes don't trigger one on their own).
