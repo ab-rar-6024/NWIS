@@ -1,0 +1,23 @@
+# Render Blueprint for the eRTMAC-NWIS backend.
+# Deploy: push this repo to GitHub, then in Render use "New +" -> "Blueprint" and point it at the repo.
+#
+# The build step regenerates the synthetic dataset, ingests it, and trains the risk model from scratch on
+# every deploy — so the service always starts from a clean, consistent demo state (and there is nothing to
+# commit under data/, which stays gitignored). Expect the build to take a few minutes.
+services:
+  - type: web
+    name: nwis-backend
+    runtime: python
+    plan: free
+    buildCommand: >
+      pip install -r backend/requirements.txt &&
+      cd backend &&
+      python scripts/build_dataset.py &&
+      python scripts/ingest_all.py &&
+      python scripts/train_model.py
+    startCommand: cd backend && uvicorn nwis.api:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: NWIS_CORS_ORIGINS
+        sync: false  # set this in the Render dashboard once you know your Vercel URL, e.g. https://your-app.vercel.app
