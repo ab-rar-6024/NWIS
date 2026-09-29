@@ -48,7 +48,9 @@ repo URL rather than the GitHub App, so there's no OAuth grant on file — see t
    Deploy** → **Deploy latest commit**. (You can connect the GitHub App later, under the service's Settings,
    if you'd rather have it auto-deploy — that's the point where Render will ask to authorize repo access.)
 
-## 2. Frontend on Vercel
+## 2. Frontend on Vercel — done
+
+Deployed at **https://nwis-ten.vercel.app** (project `nwis`, imported from `ab-rar-6024/NWIS`).
 
 1. Go to [vercel.com](https://vercel.com) → **Add New** → **Project**, import the same GitHub repo.
 2. Set **Root Directory** to `frontend` (this repo is a monorepo; `frontend/vercel.json` handles the build
@@ -59,22 +61,29 @@ repo URL rather than the GitHub App, so there's no OAuth grant on file — see t
    to redeploy the frontend, not just restart it.
 4. Deploy. Vercel will give you a URL like `https://your-app.vercel.app`.
 
-## 3. Point the backend's CORS at the frontend
+Vercel's GitHub App didn't have access to the repo by default (it was installed with an allow-list of
+specific repos); it was added via `github.com/settings/installations` → the Vercel app → adding `NWIS` to
+the selected-repositories list, rather than granting "All repositories".
+
+## 3. Point the backend's CORS at the frontend — done
 
 Back in the Render dashboard, open the `nwis-backend` service → **Environment**, and set:
 ```
-NWIS_CORS_ORIGINS = https://your-app.vercel.app
+NWIS_CORS_ORIGINS = https://nwis-ten.vercel.app
 ```
-(comma-separate multiple origins if you also want to allow a Vercel preview URL or localhost). Save — Render
-redeploys automatically. Until you set this, the API defaults to allowing any origin (there's no
-authentication or cookie-based session on this API, so that's low-risk for a demo, but locking it to your
-actual frontend is the tidier choice once you know the URL).
+(comma-separate multiple origins if you also want to allow a Vercel preview URL or localhost). Save — this
+triggers a rebuild (env var changes require a rebuild on this Blueprint, same as any code push, ~4 minutes).
+Before this was set, the API defaulted to allowing any origin — low-risk for a demo since there's no
+authentication or cookie-based session on this API, but locking it to the actual frontend is tidier.
 
 ## Verifying it worked
 
-- `https://nwis-backend-hz80.onrender.com/api/health` should return `{"ok": true, ...}` — confirmed working.
-- Open the Vercel URL, go to **Live monitor**, and start the replay — if alerts and charts update live, the
-  SSE connection to Render is working end to end.
+- `https://nwis-backend-hz80.onrender.com/api/health` returns `{"ok": true, "wells": 44, "events": 398,
+  "model": true}` — confirmed working.
+- `https://nwis-ten.vercel.app` loads wells/summary/impact/model-metrics from the Render backend — confirmed
+  working (network tab shows 200s from `nwis-backend-hz80.onrender.com` with CORS locked to this origin).
+- Live monitor replay was started end-to-end on the deployed site: depth, drilling speed, fluid weight, and
+  alert count all updated live via SSE across the Vercel → Render boundary — confirmed working.
 - If the Live monitor looks stuck: open the browser console and check for CORS errors (means step 3 needs
   fixing) or a failed `EventSource` connection (means `VITE_API_BASE` wasn't set before the Vercel build, or
   the Render service is still cold-starting — wait ~60s and retry).
