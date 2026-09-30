@@ -64,7 +64,9 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [w, s] = await Promise.all([api.wells(), api.summary()])
+      // A sleeping backend can hold the request open for a minute; give up after 15 s so the retry loop kicks in.
+      const timeout = new Promise<never>((_, rej) => setTimeout(() => rej(new Error('server is still starting')), 15000))
+      const [w, s] = await Promise.race([Promise.all([api.wells(), api.summary()]), timeout])
       setWells(w)
       setSummary(s)
       setLoadErr(null)
