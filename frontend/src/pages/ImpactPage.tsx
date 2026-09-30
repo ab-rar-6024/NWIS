@@ -81,11 +81,15 @@ export default function ImpactPage() {
         <div className="chip badge-info" style={{ marginBottom: 10 }}>SIH26121 · Oil India Limited · eRTMAC-NWIS</div>
         <h2 style={{ fontSize: 22, maxWidth: 760 }}>Every well that has ever been drilled nearby already knows what this well is about to run into.</h2>
         <p className="muted" style={{ maxWidth: 760, marginTop: 8 }}>
-          Drilling teams currently rediscover the same mud losses, kicks and stuck-pipe incidents well after well, because the
-          knowledge sits scattered across PDF reports that nobody has time to re-read. <b>NWIS reads every historical report
-          (including scanned ones, via OCR), turns each incident into a structured, located record, and uses the wells around
-          the one being drilled to warn the crew before the bit gets there</b> — not after.
+          NWIS reads every past drilling report (scanned ones too), locates each incident, and warns the crew
+          from the wells around them <b>before the bit gets there</b>.
         </p>
+        {data && (
+          <div className="row" style={{ marginTop: 14, gap: 14, alignItems: 'baseline' }}>
+            <span style={{ fontSize: 44, fontWeight: 750, color: 'var(--accent)', letterSpacing: '-0.03em' }}>{pct(data.event_coverage)}</span>
+            <span className="muted" style={{ maxWidth: 420 }}>of past incidents would have been flagged in advance, testing each well using only its neighbours.</span>
+          </div>
+        )}
         <div className="row" style={{ marginTop: 14 }}>
           <button className="btn primary" onClick={() => go('live')}>See it warn a well live <Icon name="activity" size={15} /></button>
           <button className="btn" onClick={() => go('correlation')}>See the offset correlation</button>
@@ -98,12 +102,10 @@ export default function ImpactPage() {
       {data && (
         <>
           <div className="card">
-            <h3>Measured, not claimed: a leave-one-well-out backtest across the whole fleet</h3>
+            <h3>Backtest: each well forecast from its neighbours only</h3>
             <p className="muted small" style={{ maxWidth: 820 }}>
-              For every well already in the knowledge base, we hide <i>its own</i> reports and forecast hazards using only the
-              wells around it — the exact situation a crew faces before that well has a completion report of its own. We then
-              check how much of that well's real downtime falls inside a forecast zone. This runs at radius {data.radius_km} km
-              across {data.n_wells} wells; widen the radius on the Nearby-wells page and revisit this page to see the effect.
+              Each well's own reports are hidden, then its downtime is checked against the zones forecast from wells within
+              {' '}{data.radius_km} km. Change the radius on the Nearby wells page to see it recompute.
             </p>
             <div className="kpis" style={{ marginTop: 4 }}>
               <Kpi value={pct(data.event_coverage)} label="of past incidents would have been flagged in advance" />
@@ -142,44 +144,36 @@ export default function ImpactPage() {
             </div>
           )}
 
-          <div className="card">
-            <h3>How much should you trust these numbers?</h3>
-            <p className="muted small" style={{ maxWidth: 820 }}>
-              Two checks, run deliberately against the system's own worst case rather than its best case.
-            </p>
-            <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
-              <div style={{ background: '#0d1830', border: '1px solid var(--line-soft)', borderRadius: 10, padding: '12px 14px' }}>
-                <div style={{ fontWeight: 650, marginBottom: 4 }}>Read on reports it had never seen</div>
-                <div className="small muted">
-                  Two wells' reports were set aside and never looked at while the extractor was being built. Read cold, it
-                  still found <b>every</b> real problem in them (recall 100%), with 91% precision — F1 <b>0.95</b>, close to
-                  its 0.99 score on the reports it was tuned against, which is the honest way to say "this isn't just
-                  memorising its own test."
+          {metrics && (
+            <div className="card">
+              <h3>How much should you trust these numbers?</h3>
+              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 12 }}>
+                <div style={{ background: '#0d1830', border: '1px solid var(--line-soft)', borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontWeight: 650, marginBottom: 4 }}>Tested on wells it never trained on</div>
+                  <div className="small muted">
+                    Cross-validated by well. Across the five hazards the model's <Term term="AUC">AUC</Term> ranges from{' '}
+                    <b>{Math.min(...RISK_TYPES.map((t) => metrics.results.full[t].auc)).toFixed(2)}</b> to{' '}
+                    <b>{Math.max(...RISK_TYPES.map((t) => metrics.results.full[t].auc)).toFixed(2)}</b> (0.5 is a coin flip, 1.0 is perfect).
+                  </div>
                 </div>
-              </div>
-              <div style={{ background: '#0d1830', border: '1px solid var(--line-soft)', borderRadius: 10, padding: '12px 14px' }}>
-                <div style={{ fontWeight: 650, marginBottom: 4 }}>How often the AI model is wrong</div>
-                <div className="small muted">
-                  Counting alerts, not raw data points: across the fleet, the model raises roughly <b>1-5 alerts per well</b> for
-                  a given hazard, of which <b>about half to two-thirds</b> line up with a real recorded problem — the rest are
-                  false alarms. It still catches <b>79-100%</b> of the real problems that occurred. That is a realistic, not
-                  inflated, picture of what a crew would actually experience.
+                <div style={{ background: '#0d1830', border: '1px solid var(--line-soft)', borderRadius: 10, padding: '12px 14px' }}>
+                  <div style={{ fontWeight: 650, marginBottom: 4 }}>It will raise false alarms</div>
+                  <div className="small muted">
+                    Alerts are thresholded, so some will not match a recorded problem. That is why engineers can mark each
+                    alert accurate or a false alarm on the Live monitor. All data here is synthetic.
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          )}
 
           {modelUplift && (
             <div className="card">
-              <h3>Is the live monitor worth building, or would a static map be enough?</h3>
+              <h3>What live monitoring adds beyond a static map</h3>
               <p className="muted small" style={{ maxWidth: 820 }}>
-                Both sides of this comparison are the same trained model — we haven't benchmarked against another
-                team's specific formula, since we don't have their code to run. What we can measure honestly is our
-                own: one version sees <i>only</i> where this well sits relative to its neighbours (exactly what the
-                look-ahead zones already show, with no live sensor data at all); the other adds the live drilling
-                signals — torque, ROP, gas, mud weight, mechanical specific energy — on top. The gap between them is
-                the answer to "does watching the well live add anything beyond knowing your neighbours," measured
-                in <Term term="AUC">AUC</Term>, not assumed.
+                Same model, two inputs. One sees only where the well sits relative to its neighbours; the other adds live
+                drilling signals (torque, ROP, gas, mud weight, MSE). The gap, measured in <Term term="AUC">AUC</Term>, is what
+                live monitoring adds.
               </p>
               <div className="kpis" style={{ marginTop: 4 }}>
                 <Kpi value={`+${(modelUplift.avgGain * 100).toFixed(0)} pts`} label="average AUC gained by adding live signals on top of offset knowledge" hint="Mean of (full model AUC − offset-knowledge-only AUC) across all five hazards" />
@@ -199,13 +193,6 @@ export default function ImpactPage() {
                   </tbody>
                 </table>
               </Advanced>
-              <div className="quote" style={{ marginTop: 10 }}>
-                Both numbers come with an explanation attached: the offset-only score is exactly what powers the
-                look-ahead zones' evidence ("these named offset wells, at this depth"); the added gain from live
-                signals is what the model risk gauges and MSE-based alerts are for. Neither replaces the other —
-                and either way, a design choice to skip a trained model entirely wouldn't make a system safer, just
-                harder to hold to a number.
-              </div>
             </div>
           )}
 
@@ -216,7 +203,7 @@ export default function ImpactPage() {
                 ['OCR, not just text PDFs', 'Scanned completion reports are detected automatically and read with OCR — the demo includes 4 rasterised reports read at 97%+ confidence.'],
                 ['Evidence, not a black box', 'Every alert names the offset wells and report lines behind it. Click any event to read the original sentence it came from.'],
                 ['Validated like a real model', 'Cross-validated by well (never trained and tested on the same well); an ablation shows how much comes from neighbour knowledge alone, before any live signal exists.'],
-                ['A number for the backtest, not a slide', 'The coverage and rupee figures on this page are computed live from the current data — change the radius and they recompute.'],
+                ['Computed, not typed', 'The coverage and rupee figures on this page are computed live from the current data.'],
                 ['Closes the loop', 'Engineers mark each alert accurate or a false alarm on the Live monitor page; that record is exactly what a retraining pass would use.'],
                 ['Two independent reports, one fact', 'When a daily report and a completion report describe the same incident, they are merged and marked corroborated — higher confidence than either alone.'],
                 ['A real drilling-engineering signal', "Mechanical Specific Energy (Teale's formula) is computed live from the well's own planned casing programme, not just plotted — it also feeds the risk model as a real feature."],

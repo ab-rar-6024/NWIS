@@ -43,11 +43,13 @@ class AppState:
         self.sessions: dict[int, LiveSession] = {}
         self.lock = threading.RLock()
         self._impact_cache: dict[tuple[float, float], dict] = {}
+        self.reviews: dict[int, str] = {}  # event id -> confirmed | rejected (engineer sign-off on extracted events)
 
     def reload(self) -> None:
         with self.lock:
             self.kb.reload()
             self._impact_cache.clear()
+            self.reviews.clear()  # event ids are reassigned when the knowledge base is rebuilt
             for wid, s in list(self.sessions.items()):
                 if not s.running and wid in self.kb.traj:
                     s.kb = self.kb
@@ -278,6 +280,54 @@ def list_events(well: str | None = None, type: str | None = None, formation: str
         res.append(e)
     res.sort(key=lambda e: -(e["npt_h"] or 0))
     return {"total": len(res), "events": [_event_public(e, st.kb.wells) for e in res[:limit]]}
+
+
+# ------------------------------------------------------------------------------------------------ review queue
+class ReviewBody(BaseModel):
+    status: str = Field(pattern="^(confirmed|rejected|pending)$")
+
+
+def _review_reasons(e: dict) -> list[str]:
+    reasons = []
+    if (e["confidence"] or 0) < 0.85:
+        reasons.append("low extraction confidence")
+    if e["depth_source"] != "explicit":
+        reasons.append("depth inferred from report day")
+    if not e["corroborated"]:
+        reasons.append("reported in one document only")
+    return reasons
+
+
+@app.get("/api/review-queue")
+def review_queue(status: str = Query("pending", pattern="^(pending|confirmed|rejected|all)$"), limit: int = Query(200, le=1000),
+                 st: AppState = Depends(get_state)):
+    rows = []
+    for e in st.kb.events:
+        reasons = _review_reasons(e)
+        if not reasons:
+            continue
+        cur = st.reviews.get(e["id"], "pending")
+        if status != "all" and cur != status:
+            continue
+        rows.append({**_event_public(e, st.kb.wells), "reasons": reasons, "review": cur})
+    # least trustworthy first: most reasons, then lowest confidence
+    rows.sort(key=lambda r: (-len(r["reasons"]), r["confidence"] or 0))
+    flagged = [e for e in st.kb.events if _review_reasons(e)]
+    counts = {"pending": 0, "confirmed": 0, "rejected": 0}
+    for e in flagged:
+        counts[st.reviews.get(e["id"], "pending")] += 1
+    return {"counts": counts, "total_flagged": len(flagged), "total_events": len(st.kb.events), "events": rows[:limit]}
+
+
+@app.post("/api/events/{event_id}/review")
+def review_event(event_id: int, body: ReviewBody, st: AppState = Depends(get_state)):
+    if not any(e["id"] == event_id for e in st.kb.events):
+        raise HTTPException(404, "Event not found")
+    if body.status == "pending":
+        st.reviews.pop(event_id, None)
+    else:
+        st.reviews[event_id] = body.status
+    return {"id": event_id, "review": body.status}
 
 
 @app.get("/api/events/{event_id}")

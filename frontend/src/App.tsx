@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { api, Summary, WellRow } from './lib/api'
-import { Icon, ModeToggle } from './components/common'
+import { Icon, ModeToggle, Spinner } from './components/common'
 import { UiModeProvider } from './lib/uiMode'
 import ImpactPage from './pages/ImpactPage'
 import MapPage from './pages/MapPage'
@@ -8,8 +8,11 @@ import CorrelationPage from './pages/CorrelationPage'
 import KnowledgePage from './pages/KnowledgePage'
 import LivePage from './pages/LivePage'
 import DocumentsPage from './pages/DocumentsPage'
+import ReviewPage from './pages/ReviewPage'
+import StartPage from './pages/StartPage'
+import RigPage from './pages/RigPage'
 
-export type PageId = 'impact' | 'map' | 'correlation' | 'knowledge' | 'live' | 'documents'
+export type PageId = 'start' | 'impact' | 'map' | 'correlation' | 'knowledge' | 'live' | 'rig' | 'documents' | 'review'
 
 interface Ctx {
   wells: WellRow[]
@@ -26,31 +29,38 @@ const AppCtx = createContext<Ctx>(null as unknown as Ctx)
 export const useApp = () => useContext(AppCtx)
 
 const NAV: { id: PageId; label: string; icon: string }[] = [
+  { id: 'start', label: 'Start', icon: 'layers' },
   { id: 'impact', label: 'Why it matters', icon: 'alert' },
   { id: 'map', label: 'Nearby wells', icon: 'map' },
   { id: 'correlation', label: 'Correlation', icon: 'layers' },
   { id: 'knowledge', label: 'Knowledge base', icon: 'search' },
   { id: 'live', label: 'Live monitor', icon: 'activity' },
+  { id: 'rig', label: 'Rig view', icon: 'alert' },
   { id: 'documents', label: 'Documents & model', icon: 'file' },
+  { id: 'review', label: 'Review queue', icon: 'check' },
 ]
 
 const TITLES: Record<PageId, string> = {
+  start: 'eRTMAC-NWIS · Nearby Wells Intelligence',
   impact: 'What this solves, measured on the fleet',
   map: 'Wells near the one being drilled',
   correlation: 'Compare this well with the wells around it',
   knowledge: 'Search past drilling problems and what worked',
   live: 'Live monitor: warnings from nearby wells while drilling',
+  rig: 'Rig floor: what to watch next, at a glance',
   documents: 'Upload a report and see what the system finds',
+  review: 'Engineer review: confirm or reject uncertain extractions',
 }
 
 export default function App() {
-  const initial = (location.hash.replace('#', '') as PageId) || 'impact'
-  const [page, setPage] = useState<PageId>(NAV.some((n) => n.id === initial) ? initial : 'impact')
+  const initial = (location.hash.replace('#', '') as PageId) || 'start'
+  const [page, setPage] = useState<PageId>(NAV.some((n) => n.id === initial) ? initial : 'start')
   const [wells, setWells] = useState<WellRow[]>([])
   const [summary, setSummary] = useState<Summary | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
   const [radius, setRadius] = useState(6)
   const [loadErr, setLoadErr] = useState<string | null>(null)
+  const [attempt, setAttempt] = useState(0)
 
   const refresh = useCallback(async () => {
     try {
@@ -58,12 +68,20 @@ export default function App() {
       setWells(w)
       setSummary(s)
       setLoadErr(null)
+      setAttempt(0)
       setSelectedId((cur) => cur ?? w.find((x) => x.status === 'ACTIVE')?.id ?? w[0]?.id ?? null)
     } catch (e) {
       setLoadErr(e instanceof Error ? e.message : String(e))
+      setAttempt((n) => n + 1)
     }
   }, [])
   useEffect(() => { refresh() }, [refresh])
+  // The free-tier backend sleeps when idle; keep retrying until it wakes instead of showing an error.
+  useEffect(() => {
+    if (!loadErr || wells.length > 0) return
+    const t = setTimeout(refresh, 4000)
+    return () => clearTimeout(t)
+  }, [loadErr, attempt, wells.length, refresh])
 
   const go = useCallback((p: PageId) => { setPage(p); location.hash = p }, [])
   useEffect(() => {
@@ -99,7 +117,7 @@ export default function App() {
               <h1>{TITLES[page]}</h1>
               <span className="spacer" />
               <ModeToggle />
-              {page !== 'impact' && wells.length > 0 && (
+              {page !== 'impact' && page !== 'start' && wells.length > 0 && (
                 <label className="row muted small" style={{ gap: 8 }}>
                   Well
                   <select className="select" value={selectedId ?? ''} onChange={(e) => setSelectedId(Number(e.target.value))} aria-label="Select well">
@@ -107,22 +125,33 @@ export default function App() {
                   </select>
                 </label>
               )}
-              {page !== 'impact' && sel && <span className="chip">{sel.field}</span>}
+              {page !== 'impact' && page !== 'start' && sel && <span className="chip">{sel.field}</span>}
             </div>
             <div className="banner" role="note">
               Demonstration dataset: all wells, reports and drilling logs are <b>synthetic</b> (no Oil India data was used). The pipeline ingests real WCR/DDR PDFs and eRTMAC-style feeds without change.
             </div>
             <div className="page">
-              {loadErr && <div className="err">Cannot reach the API ({loadErr}). Start it with <span className="mono">uvicorn nwis.api:app</span>.</div>}
-              {!loadErr && wells.length === 0 && <div className="empty">No wells loaded. Run the data build and ingestion scripts (see README).</div>}
+              {wells.length === 0 && (
+                <div className="card" role="status">
+                  <span className="row"><Spinner />
+                    <b>Waking up the analysis server…</b></span>
+                  <p className="muted small" style={{ marginTop: 8 }}>
+                    The demo backend sleeps when idle and takes up to a minute to start. This page will load by itself
+                    {attempt > 0 ? ` (attempt ${attempt + 1})` : ''}.
+                  </p>
+                </div>
+              )}
               {wells.length > 0 && (
                 <>
+                  {page === 'start' && <StartPage />}
                   {page === 'impact' && <ImpactPage />}
                   {page === 'map' && <MapPage />}
                   {page === 'correlation' && <CorrelationPage />}
                   {page === 'knowledge' && <KnowledgePage />}
                   {page === 'live' && <LivePage />}
+                  {page === 'rig' && <RigPage />}
                   {page === 'documents' && <DocumentsPage />}
+                  {page === 'review' && <ReviewPage />}
                 </>
               )}
             </div>

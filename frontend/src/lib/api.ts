@@ -304,6 +304,18 @@ export interface LiveState {
   planned_td_md: number
 }
 
+export interface ReviewEvent extends EventPublic {
+  reasons: string[]
+  review: 'pending' | 'confirmed' | 'rejected'
+}
+
+export interface ReviewQueue {
+  counts: { pending: number; confirmed: number; rejected: number }
+  total_flagged: number
+  total_events: number
+  events: ReviewEvent[]
+}
+
 export interface LiveSnapshot {
   state: LiveState
   history: LiveSample[]
@@ -417,6 +429,9 @@ export const api = {
     return j<IngestResult>('/api/documents/upload', { method: 'POST', body: fd })
   },
   metrics: () => j<Metrics>('/api/model/metrics'),
+  reviewQueue: (status: string) => j<ReviewQueue>(`/api/review-queue${q({ status })}`),
+  reviewEvent: (id: number, status: 'confirmed' | 'rejected' | 'pending') =>
+    j<{ id: number; review: string }>(`/api/events/${id}/review`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }),
   liveSnapshot: (id: number) => j<LiveSnapshot>(`/api/live/${id}/snapshot`),
   liveControl: (id: number, body: { action: string; speed?: number; start_md?: number }) =>
     j<LiveState>(`/api/live/${id}/control`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
