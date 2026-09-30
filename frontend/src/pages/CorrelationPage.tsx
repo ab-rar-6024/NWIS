@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useMemo, useState } from 'react'
-import { api, COLORS, Correlation, CorrWell, EVENT_TYPES, EventType, LABELS, Lookahead, RiskRow, RISK_TYPES, Zone } from '../lib/api'
+import { api, COLORS, Correlation, CorrWell, EVENT_TYPES, EventType, LABELS, Lookahead, OffsetRow, RiskRow, RISK_TYPES, Zone } from '../lib/api'
 import { useApp } from '../App'
 import { EventDrawer } from '../components/EventDrawer'
 import { Advanced, ErrorBox, Intro, Spinner, Term } from '../components/common'
@@ -35,6 +35,7 @@ export default function CorrelationPage() {
   const [data, setData] = useState<Correlation | null>(null)
   const [look, setLook] = useState<Lookahead | null>(null)
   const [risk, setRisk] = useState<RiskRow[]>([])
+  const [near, setNear] = useState<OffsetRow[]>([]) // every well inside the radius (the chart may show fewer)
   const [err, setErr] = useState<unknown>(null)
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState<number | null>(null)
@@ -45,8 +46,8 @@ export default function CorrelationPage() {
     let live = true
     setLoading(true)
     const t = setTimeout(() => {
-      Promise.all([api.correlation(selectedId, radius, limit), api.lookahead(selectedId, 0, 6000, radius), api.riskProfile(selectedId, radius)])
-        .then(([c, l, r]) => { if (live) { setData(c); setLook(l); setRisk(r.profile); setErr(null) } })
+      Promise.all([api.correlation(selectedId, radius, limit), api.lookahead(selectedId, 0, 6000, radius), api.riskProfile(selectedId, radius), api.offsets(selectedId, radius)])
+        .then(([c, l, r, o]) => { if (live) { setData(c); setLook(l); setRisk(r.profile); setNear(o.offsets); setErr(null) } })
         .catch((e) => live && setErr(e))
         .finally(() => live && setLoading(false))
     }, 150)
@@ -83,11 +84,11 @@ export default function CorrelationPage() {
 
   const plainSummary = useMemo(() => {
     if (!data) return null
-    const offs = data.offsets
-    const totalEvents = offs.reduce((a, w) => a + w.events.length, 0)
-    const totalNpt = offs.reduce((a, w) => a + w.events.reduce((s, e) => s + (e.npt_h || 0), 0), 0)
+    const offs = near
+    const totalEvents = offs.reduce((a, w) => a + w.events, 0)
+    const totalNpt = offs.reduce((a, w) => a + w.npt_h, 0)
     const counts: Partial<Record<EventType, number>> = {}
-    offs.forEach((w) => w.events.forEach((e) => { counts[e.type] = (counts[e.type] ?? 0) + 1 }))
+    offs.forEach((w) => EVENT_TYPES.forEach((t) => { counts[t] = (counts[t] ?? 0) + (w.event_counts[t] ?? 0) }))
     const topType = (Object.entries(counts) as [EventType, number][]).sort((a, b) => b[1] - a[1])[0]
     const risks: { formation: string; hazard: EventType; prevalence: number }[] = []
     risk.forEach((r) => RISK_TYPES.forEach((t) => {
