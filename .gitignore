@@ -10,3 +10,7 @@ data/
 .agents/
 .claude/
 skills-lock.json
+
+# Equinor Volve reports: licence says do not redistribute
+data/volve_ddr/
+data/volve_holdout/

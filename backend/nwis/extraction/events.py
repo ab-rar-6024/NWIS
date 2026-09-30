@@ -26,7 +26,8 @@ def _p(pattern: str, flags: int = re.I) -> re.Pattern:
 TRIGGERS: dict[str, re.Pattern] = {
     "mud_loss": _p(
         r"(?:seepage|partial|severe|total)\s+(?:mud\s+)?loss(?:es)?\b"
-        r"|lost\s+circulation"
+        r"|lost\s+circ\w*"  # 'lost circulation' and the common abbreviation 'lost circ'
+        r"|lost\s+returns"
         r"|loss\s+of\s+returns"
         r"|observed\s+(?:mud\s+)?losses"
         r"|mud\s+losses?\s+(?:encountered|noted|observed)"
@@ -40,15 +41,21 @@ TRIGGERS: dict[str, re.Pattern] = {
     "stuck_pipe": _p(
         r"(?:string|pipe|drillstring|bha)\s+(?:became\s+|was\s+|got\s+)?stuck"
         r"|stuck\s+(?:pipe|string)"
-        r"|pack-?off"
+        r"|got\s+stuck"
+        r"|freed\s+(?:the\s+)?(?:string\s+)?stuck"
+        r"|tight\s+hole"
+        r"|pack(?:ed|ing)?[-\s]{0,2}off"  # tolerate 'pack- off' from a wrapped table cell
+        r"|(?:attempts?\s+to|worked\s+[\w\s]{0,12}?\s+to)\s+pass\s+(?:the\s+)?obstruction"
     ),
     "overpressure": _p(
         r"overpress\w*"
-        r"|drilling\s+break"
+        r"|drilling\s+break[^.]{0,60}\b(?:positive|influx|flowing|gas\s+increase)"
         r"|abnormal(?:ly)?\s+(?:high\s+)?pressure"
     ),
     "torque_spike": _p(
         r"torque\s+spikes?"
+        r"|(?:tds|top\s*drive)\s+stall\w*"
+        r"|torqued[-\s]?up(?![^.]{0,30}\bto\s+\d)"  # 'torqued up the pipe to 10k ftlbs' is a deliberate procedure
         r"|(?:high|erratic)\s+(?:and\s+erratic\s+)?torque"
         r"|torque\s+peak"
     ),
@@ -72,7 +79,7 @@ CONTINGENCY = _p(r"\b(?:precaution|contingency|in\s+case|if\s+needed|should|read
 RECOMMEND = _p(r"^\s*(?:recommend\w*|lesson\w*|it\s+is\s+recommended|suggest\w*)")
 
 DEPTH_RE = re.compile(
-    r"(?<![\d.])(\d{1,2},\d{3}|\d{2,5})(?:\.\d+)?\s*"
+    r"(?<![\d.])(\d{1,2}[, ]\d{3}|\d{2,5})(?:\.\d+)?\s*"  # thousands separator may be a comma or a space ('2 519 m')
     r"(?:(?:mMD|mts|meters|metres)(?![\d/])"  # unambiguous units may be glued to the next word by OCR
     r"|m(?![\w/])"  # plain metres: not m3, m/hr or the start of a word
     r"|(?<=\d)m(?=(?:in|at|to|and|of|with|the|while|from|during)[A-Za-z]))",  # OCR: '2371mintheBarail'
@@ -156,7 +163,7 @@ def split_sentences(text: str) -> list[str]:
 
 def parse_depth(sentence: str) -> float | None:
     for m in DEPTH_RE.finditer(sentence):
-        v = float(m.group(1).replace(",", ""))
+        v = float(re.sub(r"[, ]", "", m.group(1)))
         if DEPTH_MIN <= v <= DEPTH_MAX:
             return v
     return None
@@ -165,7 +172,7 @@ def parse_depth(sentence: str) -> float | None:
 def parse_depths(sentence: str) -> list[float]:
     out = []
     for m in DEPTH_RE.finditer(sentence):
-        v = float(m.group(1).replace(",", ""))
+        v = float(re.sub(r"[, ]", "", m.group(1)))
         if DEPTH_MIN <= v <= DEPTH_MAX:
             out.append(v)
     return out
@@ -190,23 +197,32 @@ def _first_num(rx: re.Pattern, text: str) -> float | None:
     return None
 
 
-def _find_trigger(sentence: str) -> str | None:
-    """Return the event type triggered by this sentence, or None (also None if negated / contingency)."""
+def _find_triggers(sentence: str) -> list[str]:
+    """Every event type triggered by this sentence, most specific first (empty if negated / contingency)."""
     if RECOMMEND.search(sentence):
-        return None
+        return []
     if CONTINGENCY.search(sentence) and not re.search(r"\b(?:observed|encountered|experienced|taken|noted)\b", sentence, re.I):
-        return None
+        return []
     hits: list[tuple[int, str, re.Match]] = []
     for et, rx in TRIGGERS.items():
         m = rx.search(sentence)
         if m and not _negated(sentence, m):
             hits.append((m.start(), et, m))
-    if not hits:
-        return None
     # prefer the more specific consequence types when several fire in one sentence
     priority = {"cementing_issue": 0, "fishing": 1, "kick": 2, "stuck_pipe": 3, "overpressure": 4, "mud_loss": 5, "torque_spike": 6}
     hits.sort(key=lambda h: (priority[h[1]], h[0]))
-    return hits[0][1]
+    return [h[1] for h in hits]
+
+
+def _find_trigger(sentence: str) -> str | None:
+    """Return the primary event type triggered by this sentence, or None."""
+    found = _find_triggers(sentence)
+    return found[0] if found else None
+
+
+# Hazards that can genuinely co-occur in one sentence ("hole packed off, lost circulation") and be reported separately.
+# Torque is not on this list: it is a symptom of the mechanical hazards, not a separate incident.
+INDEPENDENT_EXTRAS = {"mud_loss", "kick", "stuck_pipe", "overpressure"}
 
 
 def _fill_details(ev: RawEvent, text: str) -> None:
@@ -377,7 +393,8 @@ def extract_events(
     open_ev: RawEvent | None = None
     open_idx = -10
     for i, s in enumerate(sentences):
-        et = _find_trigger(s)
+        found = _find_triggers(s)
+        et = found[0] if found else None
         depth_here = parse_depth(s)
         merge = (
             et is not None
@@ -392,6 +409,10 @@ def extract_events(
                                sentences=[s], page=page)
             events.append(open_ev)
             open_idx = i
+            for extra in found[1:]:
+                if extra in INDEPENDENT_EXTRAS and extra != et:
+                    events.append(RawEvent(type=extra, md=depth_here, depth_source="explicit" if depth_here is not None else "none",
+                                           sentences=[s], page=page))
         elif open_ev is not None and i - open_idx <= CLUSTER_WINDOW:
             # continuation sentence: attach unless it starts a routine drilling narrative
             if re.match(r"^\s*(?:drilled|performed wiper|circulated bottoms|changed out|rig maintenance|conducted|mw\s|background|took survey|reached casing|ran\s|cemented|nipple)", s, re.I) and et is None:

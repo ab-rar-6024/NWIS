@@ -42,6 +42,8 @@ def classify(doc: ExtractedDoc, filename: str = "") -> str:
         return "WCR"
     if "DAILYDRILLINGREPORT" in head or "DDR" in filename.upper():
         return "DDR"
+    if "SUMMARYREPORT" in head and "WELLBORE" in head:  # Equinor Volve daily report layout
+        return "DDR"
     return "UNKNOWN"
 
 
@@ -156,7 +158,85 @@ def _formation_in(text: str) -> str | None:
 TIME_ROW = re.compile(r"^\s*\d{2}:\d{2}[\s|]+\d{2}:\d{2}[\s|]*(.*)$")
 
 
+_VOLVE_ROW = re.compile(r"^\s*(\d\d:\d\d)\s*\|\s*(\d\d:\d\d)[\s|]*(-?\d+(?:\.\d+)?)?\s*\|")
+_VOLVE_END = re.compile(r"^\s*(?:Drilling\s*Fluid|Pore\s*Pressure|Lithology|Gas\s*Reading|Casing|Sur\s*vey|Status\s*info)\b")  # case-sensitive: 'survey' also appears as a wrapped activity word
+_VOLVE_STATE_WORDS = {"trip", "drill", "survey", "circulating", "conditioning", "reaming", "other", "activity", "sub", "state"}
+
+
+def _volve_kv(head: str, key: str, value_rx: str) -> str | None:
+    m = re.search(key + r"[^|\n:]*:\s*" + value_rx, head, re.I)
+    return m.group(1).strip() if m else None
+
+
+def parse_summary_report(doc: ExtractedDoc) -> DDRDay | None:
+    """Parse the 'Summary report' daily layout (header block, activity summary, operations table).
+
+    The operations table wraps cells across lines, sometimes mid-word, so continuation fragments are glued back on.
+    A report is one day for one wellbore, possibly spread over several pages."""
+    lines = [ln for p in doc.pages for ln in p.lines]
+    flat = "\n".join(lines)
+    if not re.match(r"\s*Summary\s*report", flat, re.I) or not re.search(r"Wellbore\s*:", flat):
+        return None
+    head = flat.split("Operations", 1)[0]
+    well = _volve_kv(head, r"Wellbore", r"([0-9]+/[0-9]+-[0-9A-Za-z]+(?:\s[A-Z])?)")
+    period = re.search(r"Period\s*:\s*\d{4}-\d\d-\d\d[\d: ]*-\s*(\d{4}-\d\d-\d\d)", head)
+    rno = _volve_kv(head, r"Report\s*number", r"(\d+)")
+    hole = _volve_kv(head, r"Hole\s*Dia", r"(\d+(?:\.\d+)?)")
+    hdepth = _volve_kv(head, r"Depth\s*mMd", r"(-?\d+(?:\.\d+)?)")
+
+    remarks: list[str] = []
+    depths: list[float] = []
+    in_ops = False
+    for ln in lines:
+        if not in_ops:
+            if re.match(r"^\s*Operations\s*$", ln):
+                in_ops = True
+            continue
+        if _VOLVE_END.match(ln):
+            break
+        m = _VOLVE_ROW.match(ln)
+        if m:
+            if m.group(3):
+                depths.append(float(m.group(3)))
+            remarks.append(ln.rsplit("|", 1)[-1].strip())
+            continue
+        if not remarks:
+            continue  # table header lines
+        frag = ln.rsplit("|", 1)[-1].strip() if "|" in ln else ln.strip()
+        if not frag or frag.lower() in _VOLVE_STATE_WORDS:
+            continue
+        remarks[-1] += frag if (frag[:1].isalpha() and remarks[-1][-1:].isalpha()) else " " + frag
+
+    if not remarks:  # no operations table: fall back to the activity summary paragraph
+        m = re.search(r"Summar\s*y of activities \(24 Hours\)\n(.*?)Summar\s*y of planned", flat, re.S | re.I)
+        summary = " ".join(m.group(1).split()) if m else ""
+        remarks = [] if summary.upper() in ("", "NONE") else [summary]
+
+    sentences = split_sentences(" ".join(remarks))
+    hd = float(hdepth) if hdepth and float(hdepth) > 0 else None
+    depth = hd if hd is not None else (max(depths) if depths else None)
+    day = DDRDay(well, None, 1, int(rno) if rno else None, period.group(1) if period else None, depth, None,
+                 hole, None, sentences)
+    day.events = _merge_same_incident(extract_events(sentences, day_depth=depth, page=1))
+    return day
+
+
+def _merge_same_incident(events: list[RawEvent], tol_m: float = 30.0) -> list[RawEvent]:
+    """A report often re-describes one incident over several sentences; keep one event per type within tol_m."""
+    out: list[RawEvent] = []
+    for e in events:
+        twin = next((o for o in out if o.type == e.type and o.md is not None and e.md is not None and abs(o.md - e.md) <= tol_m), None)
+        if twin is None:
+            out.append(e)
+        else:
+            twin.sentences.extend(e.sentences)
+    return out
+
+
 def parse_ddr(doc: ExtractedDoc) -> list[DDRDay]:
+    vol = parse_summary_report(doc)
+    if vol is not None:
+        return [vol]
     days: list[DDRDay] = []
     conf = doc.mean_confidence if doc.ocr_used else None
     for page in doc.pages:
