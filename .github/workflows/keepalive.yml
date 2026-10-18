@@ -12,11 +12,18 @@ on:
 jobs:
   ping:
     runs-on: ubuntu-latest
+    timeout-minutes: 6
     steps:
       - name: Ping backend health endpoint
+        # A cold start can exceed 60s, so allow a long timeout and retry. `|| true` keeps curl's non-zero
+        # exit (28 = timed out) from failing the job under bash -e; an unhealthy backend is only a warning.
         run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 https://nwis-backend-hz80.onrender.com/api/health)
-          echo "Health check responded with HTTP $code"
-          if [ "$code" != "200" ]; then
-            echo "::warning::Backend did not return 200 (got $code) - it may be cold-starting or down."
-          fi
+          for attempt in 1 2 3; do
+            code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 90 https://nwis-backend-hz80.onrender.com/api/health || true)
+            echo "Attempt $attempt: health check responded with HTTP $code"
+            if [ "$code" = "200" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::warning::Backend did not return 200 (got $code) - it may be cold-starting or down."
